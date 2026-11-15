@@ -1,0 +1,25 @@
+{
+  "name": "smartai",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "ChQMe Smart AI — standalone React + LiveKit voice/video AI demo widget",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 4173"
+  },
+  "dependencies": {
+    "@ricky0123/vad-web": "^0.0.30",
+    "livekit-client": "^2.19.1",
+    "onnxruntime-web": "^1.27.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.0",
+    "@vitejs/plugin-react": "^6.0.1",
+    "tailwindcss": "^4.3.0",
+    "vite": "^8.0.1"
+  }
+}

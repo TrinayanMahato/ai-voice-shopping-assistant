@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>ChQMe – Smart AI</title>
+    <style>
+      #landscape-blocker { display: none; }
+      @media screen and (max-width: 1199px) and (orientation: landscape) and (hover: none) and (pointer: coarse) {
+        #landscape-blocker {
+          display: flex !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="landscape-blocker" style="position:fixed;inset:0;z-index:999999;background-color:#111827;flex-direction:column;align-items:center;justify-content:center;color:white;text-align:center;padding:24px;">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:16px;transform:rotate(90deg);"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>
+      <h2 style="font-size:20px;font-weight:bold;margin-bottom:8px;font-family:sans-serif;">Please Rotate Your Device</h2>
+      <p style="color:#9ca3af;font-size:14px;font-family:sans-serif;margin:0;max-width:300px;">This smart experience is designed exclusively for portrait mode.</p>
+    </div>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

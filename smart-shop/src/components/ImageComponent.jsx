@@ -1,0 +1,431 @@
+import React, { useState, useEffect, useRef } from 'react';
+
+// Convert a hex (#rgb / #rrggbb) or rgb() color into an rgba() string.
+function toRgba(color, alpha = 1) {
+  if (!color) return `rgba(99,102,241,${alpha})`;
+  let h = String(color).trim();
+  if (h.startsWith('rgb')) return h;
+  h = h.replace('#', '');
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+  if (h.length !== 6 || /[^0-9a-fA-F]/.test(h)) return `rgba(99,102,241,${alpha})`;
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+export default function ImageComponent({ product, annotation, onFeatureClick, theme = '#6366f1', onTheme = '#ffffff', areaSelectEnabled = false, onAreaSelected }) {
+  const [isGalleryOpen, setIsGalleryOpen] = useState(false);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [localZoomOut, setLocalZoomOut] = useState(false);
+  const [imgDims, setImgDims] = useState({ width: 0, height: 0 });
+
+  // Area-selection ("pencil") state — mobile only, off unless areaSelectEnabled.
+  // The user draws freely; on release the freehand shape collapses to its
+  // bounding rectangle, and every hotspot whose center lands inside is picked.
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [pathPoints, setPathPoints] = useState([]);    // [{ fx, fy }] fractions 0..1
+  const isDrawingRef = useRef(false);
+  const imageBoxRef = useRef(null);                    // aspect-ratio container == image bounds
+
+  // Fallbacks
+  const mainImage = annotation?.image_url || product?.featured_image;
+  const regions = annotation?.regions || [];
+  const focusLabel = annotation?.focus_label;
+
+  const hasGallery = product?.images && product.images.length > 0;
+
+  // Product-detail-page (PDP) link for the "View Product" button. The product payload
+  // has no dedicated PDP field, so fall back through the likely candidates.
+  const pdpUrl = product?.view_product_url || product?.product_url || product?.url || product?.pdp_url
+    || product?.handle || product?.permalink || product?.buy_now_url || product?.checkout_url || null;
+  const cartUrl = product?.add_to_cart_url || product?.cart_url || pdpUrl;
+
+  // Whether the annotation carries real pixel dimensions (needed for hotspot overlay math).
+  const hasDims = !!(annotation?.image_width && annotation?.image_height);
+
+  // Reset local zoom + any in-progress selection when the AI focuses a new region.
+  useEffect(() => {
+    if (mainImage) {
+      console.log('[Main Image Displayed] ImageComponent rendering image URL:', mainImage);
+    }
+    setLocalZoomOut(false);
+    setIsSelecting(false);
+    setPathPoints([]);
+    isDrawingRef.current = false;
+  }, [focusLabel, mainImage]);
+
+  // Whether the pencil tool is available: mobile + real dims + at least one hotspot.
+  const canAreaSelect = areaSelectEnabled && hasDims && regions.length > 0;
+
+  // Find focus region if focusLabel exists AND user hasn't manually zoomed out.
+  // While actively selecting an area we never zoom, so the drawing math stays on the
+  // un-scaled image.
+  let focusRegion = null;
+  if (!isSelecting && !localZoomOut && focusLabel && regions.length > 0) {
+    focusRegion = regions.find((r) => r.label === focusLabel);
+  }
+
+  // ── Pencil / freehand selection handlers ───────────────────────────────────
+  const pointToFraction = (e) => {
+    const rect = imageBoxRef.current?.getBoundingClientRect();
+    if (!rect || rect.width === 0 || rect.height === 0) return null;
+    const fx = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    const fy = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height));
+    return { fx, fy };
+  };
+
+  const handleSelectPointerDown = (e) => {
+    if (!isSelecting) return;
+    const p = pointToFraction(e);
+    if (!p) return;
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    isDrawingRef.current = true;
+    setPathPoints([p]);
+  };
+
+  const handleSelectPointerMove = (e) => {
+    if (!isSelecting || !isDrawingRef.current) return;
+    const p = pointToFraction(e);
+    if (p) setPathPoints((pts) => [...pts, p]);
+  };
+
+  const handleSelectPointerUp = () => {
+    if (!isSelecting || !isDrawingRef.current) return;
+    isDrawingRef.current = false;
+
+    // Collapse the freehand shape to its bounding rectangle.
+    const pts = pathPoints;
+    if (pts.length === 0) return;
+    const minX = Math.min(...pts.map((p) => p.fx));
+    const maxX = Math.max(...pts.map((p) => p.fx));
+    const minY = Math.min(...pts.map((p) => p.fy));
+    const maxY = Math.max(...pts.map((p) => p.fy));
+
+    const selected = regions.filter((r) => {
+      const cx = r.center.x / annotation.image_width;
+      const cy = r.center.y / annotation.image_height;
+      return cx >= minX && cx <= maxX && cy >= minY && cy <= maxY;
+    });
+
+    if (selected.length > 0 && onAreaSelected) onAreaSelected(selected);
+
+    setIsSelecting(false);
+    setPathPoints([]);
+  };
+
+  // Bounding rectangle (in %) of the freehand path — the "square" preview.
+  const pathBBox = pathPoints.length > 0 ? {
+    left: Math.min(...pathPoints.map((p) => p.fx)) * 100,
+    top: Math.min(...pathPoints.map((p) => p.fy)) * 100,
+    width: (Math.max(...pathPoints.map((p) => p.fx)) - Math.min(...pathPoints.map((p) => p.fx))) * 100,
+    height: (Math.max(...pathPoints.map((p) => p.fy)) - Math.min(...pathPoints.map((p) => p.fy))) * 100,
+  } : null;
+
+  const handleNext = () => {
+    if (product.images) {
+      setCurrentImageIndex((prev) => (prev + 1) % product.images.length);
+    }
+  };
+
+  const handlePrev = () => {
+    if (product.images) {
+      setCurrentImageIndex((prev) => (prev - 1 + product.images.length) % product.images.length);
+    }
+  };
+
+  return (
+    <div className="video-card is-focused relative bg-white rounded-[14px] overflow-hidden border border-gray-200 shadow-[0_8px_32px_rgba(0,0,0,0.08)] transition-all duration-300 flex flex-col items-center justify-center w-full h-full group">
+
+      {/* Main Image & Hotspots Container */}
+      <div className="relative w-full h-full flex-1 flex items-center justify-center pointer-events-auto overflow-hidden min-h-0 bg-[#f8fafd]">
+        {/* Ambient background filling the entire card without white space */}
+        <img
+          src={mainImage}
+          alt=""
+          aria-hidden="true"
+          className="absolute inset-0 w-full h-full object-cover blur-2xl opacity-60 scale-110 pointer-events-none select-none"
+        />
+
+        {/* Aspect Ratio Preserving Container for Accurate Overlay Coordinates */}
+        <div className="relative transition-all duration-700 ease-in-out flex items-center justify-center overflow-hidden z-10" style={{ width: '100%', height: '100%' }}>
+          <div
+            ref={imageBoxRef}
+            className="relative transition-all duration-700 ease-in-out"
+            style={{
+              width: '100%',
+              height: 'auto',
+              maxHeight: '100%',
+              aspectRatio: hasDims ? `${annotation.image_width} / ${annotation.image_height}` : 'auto',
+              transform: focusRegion ? (typeof window !== 'undefined' && window.innerWidth < 640 ? 'scale(1.35)' : 'scale(2)') : 'scale(1)',
+              transformOrigin: focusRegion && hasDims
+                ? `${(focusRegion.center.x / annotation.image_width) * 100}% ${(focusRegion.center.y / annotation.image_height) * 100}%`
+                : 'center center'
+            }}
+          >
+            <img
+              key={mainImage}
+              src={mainImage}
+              alt={product?.title || 'Shared Content'}
+              className="drop-shadow-sm pointer-events-none animate-image-reveal"
+              style={{
+                maxWidth: '100%',
+                maxHeight: '100%',
+                // Letting the image be its natural size, constrained by max-width/height above
+                objectFit: 'contain'
+              }}
+            />
+
+            {/* Hotspots & Bounding Boxes */}
+            {regions.map((region, i) => {
+              if (!annotation?.image_width || !annotation?.image_height) return null;
+
+              const centerLeft = (region.center.x / annotation.image_width) * 100;
+              const centerTop = (region.center.y / annotation.image_height) * 100;
+
+              const bboxLeft = (region.bbox.x / annotation.image_width) * 100;
+              const bboxTop = (region.bbox.y / annotation.image_height) * 100;
+              const bboxWidth = (region.bbox.width / annotation.image_width) * 100;
+              const bboxHeight = (region.bbox.height / annotation.image_height) * 100;
+
+              const isFocused = focusLabel === region.label;
+
+              return (
+                <React.Fragment key={i}>
+                  {/* Bounding Box — hidden by default, illuminates when focused */}
+                  <div
+                    className={`absolute rounded-[8px] pointer-events-none transition-all duration-500 ease-out ${isFocused ? 'border-2 shadow-[0_0_20px_rgba(0,0,0,0.15)] z-20' : isSelecting ? 'border-2 animate-hotspot-blink' : 'border-0'}`}
+                    style={{
+                      left: `${bboxLeft}%`,
+                      top: `${bboxTop}%`,
+                      width: `${bboxWidth}%`,
+                      height: `${bboxHeight}%`,
+                      ...(isFocused ? { borderColor: theme, backgroundColor: `${theme}22`, backdropFilter: 'blur(2px)' } : {}),
+                      ...(isSelecting && !isFocused ? { borderColor: theme, background: `${theme}1f` } : {}),
+                    }}
+                  />
+
+                  {/* Premium Hotspot Anchor */}
+                  <div
+                    className={`absolute z-30 cursor-pointer flex items-center justify-center transition-all duration-300 group/spot ${isFocused ? 'scale-110' : 'hover:scale-110'}`}
+                    style={{
+                      left: `${centerLeft}%`,
+                      top: `${centerTop}%`,
+                      transform: 'translate(-50%, -50%)',
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const productName = product?.title || product?.product_title || product?.name || 'this product';
+                      if (onFeatureClick) onFeatureClick(`tell me about the feature ${region.label} of the product ${productName}`);
+                    }}
+                  >
+                    {/* Wavelet Ping Animation */}
+                    <div
+                      className="absolute w-[24px] h-[24px] rounded-full animate-ping opacity-60 pointer-events-none"
+                      style={{ background: isFocused ? theme : 'rgba(255, 255, 255, 0.8)' }}
+                    />
+                    {/* White Filled Circle Icon */}
+                    <div
+                      className={`relative z-10 w-[14px] h-[14px] rounded-full transition-all duration-300 ${isFocused ? 'scale-110 shadow-[0_0_12px_rgba(0,0,0,0.5)]' : 'shadow-md'}`}
+                      style={{
+                        background: isFocused ? theme : 'rgba(255, 255, 255, 0.95)',
+                        border: '1px solid rgba(0,0,0,0.15)'
+                      }}
+                    />
+
+                    {/* Smart Label (Pill) — Visible only on hover/focus to prevent overlap */}
+                    <div
+                      className={`absolute px-3.5 py-1.5 whitespace-nowrap rounded-full font-medium text-[13px] tracking-tight transition-all duration-300 border backdrop-blur-xl pointer-events-none z-50
+                      ${centerLeft > 60 ? 'right-full mr-3' : 'left-full ml-3'}
+                      ${isFocused
+                          ? 'bg-white text-gray-900 border-gray-100/50 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.3)] opacity-100 scale-100'
+                          : 'bg-gray-900/80 text-white border-white/10 shadow-[0_4px_12px_rgba(0,0,0,0.1)] opacity-0 scale-95 group-hover/spot:opacity-100 group-hover/spot:scale-100'
+                        }`}
+                      style={isFocused ? { boxShadow: `0 0 0 1.5px ${theme}, 0 10px 25px -5px ${theme}40` } : {}}
+                    >
+                      {region.label}
+                    </div>
+                  </div>
+                </React.Fragment>
+              );
+            })}
+
+            {/* Freehand selection overlay — draw freely; releases into a bounding rectangle */}
+            {isSelecting && (
+              <div
+                className="absolute inset-0 z-20 cursor-crosshair"
+                style={{ touchAction: 'none' }}
+                onPointerDown={handleSelectPointerDown}
+                onPointerMove={handleSelectPointerMove}
+                onPointerUp={handleSelectPointerUp}
+                onPointerCancel={handleSelectPointerUp}
+              >
+                {/* Freehand trail */}
+                {pathPoints.length > 1 && (
+                  <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none">
+                    <polyline
+                      points={pathPoints.map((p) => `${p.fx * 100},${p.fy * 100}`).join(' ')}
+                      fill="none"
+                      stroke={theme}
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  </svg>
+                )}
+                {/* Live bounding rectangle (the resulting "square") */}
+                {pathBBox && (
+                  <div
+                    className="absolute pointer-events-none rounded-[2px]"
+                    style={{
+                      left: `${pathBBox.left}%`,
+                      top: `${pathBBox.top}%`,
+                      width: `${pathBBox.width}%`,
+                      height: `${pathBBox.height}%`,
+                      border: `2px dashed ${theme}`,
+                      background: `${theme}18`,
+                    }}
+                  />
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Top Right "Gallery" Button (When not zoomed in) */}
+      {hasGallery && !focusRegion && (
+        <button
+          onClick={() => setIsGalleryOpen(true)}
+          className="absolute top-[12px] right-[12px] bg-white/90 backdrop-blur-[8px] hover:bg-gray-50 border border-gray-200 text-gray-800 text-[11px] font-semibold px-[11px] py-[6px] rounded-[8px] z-30 transition-all flex items-center gap-1.5 shadow-[0_4px_12px_rgba(0,0,0,0.05)] hover:-translate-y-[1px]"
+        >
+          <span>Gallery</span>
+          <span className="text-[9px] bg-gray-200 px-1.5 py-0.5 rounded-[4px]">{product.images.length}</span>
+        </button>
+      )}
+
+      {/* Top Right "Zoom Out" Button (When zoomed in) */}
+      {focusRegion && (
+        <button
+          onClick={() => setLocalZoomOut(true)}
+          className="absolute top-[12px] right-[12px] bg-indigo-500 hover:bg-indigo-600 border border-indigo-400 text-white text-[13px] font-bold px-[16px] py-[10px] rounded-[10px] z-30 transition-all flex items-center gap-2 shadow-lg hover:-translate-y-[1px]"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            <line x1="8" y1="11" x2="14" y2="11" />
+          </svg>
+          <span>Zoom Out</span>
+        </button>
+      )}
+
+      {/* Floating action buttons (Add to cart & View Product) — bottom-left.
+          On mobile: placed above camera (bottom-100px).
+          On desktop: placed at the true bottom-4 since camera is in the dock. */}
+      {pdpUrl && (
+        <div className="absolute left-4 bottom-4 z-30 flex flex-col gap-2 items-start">
+          <a href={product?.cart_url || pdpUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 px-3.5 py-2 rounded-[9px] font-bold text-[12px] leading-none transition-all hover:-translate-y-[1px] hover:brightness-110" style={{ background: theme, color: onTheme, boxShadow: `0 6px 20px ${toRgba(theme, 0.35)}` }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="9" cy="21" r="1" /><circle cx="20" cy="21" r="1" /><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" /></svg>
+            View Cart
+          </a>
+          <a href={pdpUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 px-3.5 py-2 bg-gray-900 hover:bg-gray-800 text-white rounded-[9px] font-bold text-[12px] leading-none shadow-[0_6px_20px_rgba(0,0,0,0.25)] transition-all hover:-translate-y-[1px]">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" /><circle cx="12" cy="12" r="3" /></svg>
+            View Product
+          </a>
+        </div>
+      )}
+
+      {/* Pencil / area-select FAB — bottom-right, mobile only, needs image + hotspots.
+          Tap to enter selection mode (hotspots highlight); tap again to cancel. */}
+      {canAreaSelect && (
+        <button
+          onClick={() => {
+            setPathPoints([]);
+            isDrawingRef.current = false;
+            setIsSelecting((v) => !v);
+          }}
+          title={isSelecting ? 'Cancel area selection' : 'Select an area of hotspots'}
+          className="absolute bottom-4 right-4 z-40 w-[46px] h-[46px] rounded-full flex items-center justify-center shadow-[0_6px_20px_rgba(0,0,0,0.2)] transition-all active:scale-95"
+          style={isSelecting
+            ? { background: theme, color: onTheme }
+            : { background: '#ffffff', color: '#374151', border: '1px solid rgba(0,0,0,0.1)' }}
+        >
+          {isSelecting ? (
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          ) : (
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+            </svg>
+          )}
+        </button>
+      )}
+
+      {/* Selection hint banner while the pencil is active */}
+      {isSelecting && (
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-40 bg-black/75 text-white text-[12px] font-medium px-3 py-1.5 rounded-full pointer-events-none shadow-lg">
+          Drag to select an area of hotspots
+        </div>
+      )}
+
+      {/* Gallery Overlay / Modal */}
+      {isGalleryOpen && hasGallery && (
+        <div
+          className="absolute inset-0 z-50 bg-black/40 backdrop-blur-2xl flex flex-col items-center justify-center transition-opacity duration-300"
+          style={{ animation: 'fadeIn 0.2s ease-in-out' }}
+        >
+          {/* Close Button */}
+          <button
+            onClick={() => setIsGalleryOpen(false)}
+            className="absolute top-[20px] right-[20px] w-[40px] h-[40px] bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-sm rounded-full flex items-center justify-center text-white transition-all z-50 text-lg shadow-lg hover:scale-110"
+          >
+            ✕
+          </button>
+
+          {/* Main Gallery Image Display */}
+          <div className="relative w-full h-full flex-1 flex items-center justify-center px-16 py-8 min-h-0">
+            <button
+              onClick={handlePrev}
+              className="absolute left-[20px] w-[48px] h-[48px] bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-sm rounded-full flex items-center justify-center text-white text-xl z-50 transition-all hover:-translate-x-1 hover:scale-110"
+            >
+              ←
+            </button>
+
+            {/* Gallery image — contained, no white frame */}
+            <img
+              key={currentImageIndex}
+              src={product.images[currentImageIndex]}
+              alt={`Gallery ${currentImageIndex + 1}`}
+              className="max-w-[85%] max-h-full object-contain transition-opacity duration-300"
+              style={{ animation: 'fadeIn 0.3s ease-in-out' }}
+            />
+
+            <button
+              onClick={handleNext}
+              className="absolute right-[20px] w-[48px] h-[48px] bg-white/10 hover:bg-white/20 border border-white/20 backdrop-blur-sm rounded-full flex items-center justify-center text-white text-xl z-50 transition-all hover:translate-x-1 hover:scale-110"
+            >
+              →
+            </button>
+          </div>
+
+          {/* Gallery Indicator / Dots */}
+          <div className="flex gap-3 p-4 mb-4">
+            {product.images.map((_, idx) => (
+              <div
+                key={idx}
+                className={`w-[8px] h-[8px] rounded-full transition-all duration-300 ${idx === currentImageIndex ? 'bg-indigo-500 scale-150 shadow-[0_0_10px_rgba(99,102,241,0.5)]' : 'bg-gray-300'}`}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Top Left Badge */}
+      <div className="absolute top-[12px] left-[12px] bg-white/90 backdrop-blur-[8px] text-gray-700 text-[11px] font-semibold px-[12px] py-[5px] rounded-[8px] border border-gray-200 z-30 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-200 shadow-[0_4px_10px_rgba(0,0,0,0.05)]">
+        Shared Product
+      </div>
+    </div>
+  );
+}
